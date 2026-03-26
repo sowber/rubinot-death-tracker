@@ -79,29 +79,26 @@ async function fetchRealDeaths(worldId, minLevel, page = 1) {
     const response = await fetch(url, {
       method: 'GET',
       headers: {
-        'Accept': 'application/json',
+        'Accept': 'application/json, text/plain, */*',
         'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
-        'Cache-Control': 'no-cache, no-store, must-revalidate',
-        'Pragma': 'no-cache',
+        'Referer': 'https://rubinot.com.br/deaths',
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.7680.80 Safari/537.36',
-        'Sec-Ch-Ua': '"Chromium";v="146", "Not-A.Brand";v="24", "Google Chrome";v="146"',
-        'Sec-Ch-Ua-Mobile': '?0',
-        'Sec-Ch-Ua-Platform': '"Windows"',
         'Sec-Fetch-Dest': 'empty',
         'Sec-Fetch-Mode': 'cors',
-        'Sec-Fetch-Site': 'same-origin',
-        'Referer': 'https://rubinot.com.br/deaths',
-      },
-      credentials: 'include'
+        'Sec-Fetch-Site': 'same-site',
+      }
     });
 
+    console.log(`📊 Rubinot API response status: ${response.status}`);
+
     if (!response.ok) {
-      console.error(`API returned ${response.status}, trying fallback...`);
+      const bodyText = await response.text();
+      console.error(`❌ Rubinot API error ${response.status}: ${bodyText.substring(0, 100)}`);
       throw new Error(`API returned ${response.status}`);
     }
 
     const apiData = await response.json();
-    console.log(`✅ Real API success! Got ${apiData.length || 0} deaths`);
+    console.log(`✅ API success! Got ${Array.isArray(apiData) ? apiData.length : 'unknown'} deaths`);
     
     return apiData;
   } catch (err) {
