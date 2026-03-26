@@ -60,6 +60,8 @@ async function fetchRealDeaths(worldName, minLevel) {
     }
 
     const apiData = await response.json();
+    console.log(`📦 Raw API response:`, JSON.stringify(apiData).substring(0, 200));
+    console.log(`📋 Deaths count in response:`, apiData.deaths?.length || 0);
 
     let deaths = (apiData.deaths || []).map(d => ({
       player: d.victim,
@@ -72,12 +74,16 @@ async function fetchRealDeaths(worldName, minLevel) {
       mostDamageIsPlayer: d.mostdamage_is_player === 1
     }));
 
+    console.log(`🔍 Deaths before filtering:`, deaths.length);
+
     // Filter by world
     deaths = deaths.filter(d => d.worldName === worldName);
+    console.log(`🔍 Deaths after world filter (${worldName}):`, deaths.length);
 
     // Filter by level
     if (minLevel > 0) {
       deaths = deaths.filter(d => d.level >= minLevel);
+      console.log(`🔍 Deaths after level filter (${minLevel}):`, deaths.length);
     }
 
     console.log(`✅ Real API success! Fetched ${deaths.length} deaths for ${worldName}`);
