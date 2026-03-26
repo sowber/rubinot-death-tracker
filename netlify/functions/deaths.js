@@ -47,11 +47,19 @@ export async function handler(event) {
 
     console.log(`📊 Fetching deaths for world ${worldName}, minLevel=${minLevel}`);
 
-    // Fetch from real Rubinot API
+    // Fetch from real Rubinot API with browser-like headers
     const response = await fetch('https://rubinot.com.br/deaths', {
       method: 'POST',
       headers: {
         'Content-Type': 'text/plain;charset=UTF-8',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36',
+        'Referer': 'https://rubinot.com.br/deaths',
+        'Origin': 'https://rubinot.com.br',
+        'Accept': 'application/json',
+        'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
+        'Sec-Fetch-Dest': 'empty',
+        'Sec-Fetch-Mode': 'cors',
+        'Sec-Fetch-Site': 'same-origin'
       },
       body: '{}'
     });
