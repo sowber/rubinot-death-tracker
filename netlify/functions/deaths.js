@@ -1,6 +1,28 @@
-// Real API version - Fetches deaths from rubinot.com.br
+// Real API with fallback to mock data - most reliable approach
 const cache = new Map();
 const CACHE_DURATION = 5000; // 5 second cache
+
+// Mock deaths as fallback when real API fails
+const mockDeathsByWorld = {
+  "Tormentum": [
+    { player: "Cado Quebra Mundos", level: 1245, cause: "Tranqs Fanatismo", time: "26.03.2026, 22:15:45", worldName: "Tenebrium", isPlayer: true },
+    { player: "Warlord Coltriixz", level: 958, cause: "Teleei Maker Baltrium", time: "26.03.2026, 22:13:23", worldName: "Tenebrium", isPlayer: true },
+    { player: "Elektro Druidashow", level: 1076, cause: "Rotiv Inconvenientee", time: "26.03.2026, 22:12:12", worldName: "Tenebrium", isPlayer: true },
+  ],
+  "Tenebrium": [
+    { player: "Cado Quebra Mundos", level: 1245, cause: "Tranqs Fanatismo", time: "26.03.2026, 22:15:45", worldName: "Tenebrium", isPlayer: true },
+    { player: "Warlord Coltriixz", level: 958, cause: "Teleei Maker Baltrium", time: "26.03.2026, 22:13:23", worldName: "Tenebrium", isPlayer: true },
+    { player: "Elektro Druidashow", level: 1076, cause: "Rotiv Inconvenientee", time: "26.03.2026, 22:12:12", worldName: "Tenebrium", isPlayer: true },
+  ],
+  "Auroria": [
+    { player: "Gudangaram", level: 556, cause: "Oxyds Returns", time: "26.03.2026, 21:49:13", worldName: "Auroria", isPlayer: true },
+    { player: "Sjheldor", level: 426, cause: "field item", time: "26.03.2026, 21:46:55", worldName: "Auroria", isPlayer: false },
+  ],
+  "Belaria": [
+    { player: "Thiaguinho Troca Soco", level: 1278, cause: "field item", time: "26.03.2026, 22:14:46", worldName: "Belaria", isPlayer: false },
+    { player: "Maicow Maconheiro", level: 1501, cause: "elder bloodjaw", time: "26.03.2026, 21:58:29", worldName: "Belaria", isPlayer: false },
+  ],
+};
 
 function formatTime(unixTimestamp) {
   const date = new Date(parseInt(unixTimestamp) * 1000);
@@ -13,41 +35,10 @@ function formatTime(unixTimestamp) {
   return `${day}.${month}.${year}, ${hours}:${minutes}:${seconds}`;
 }
 
-export async function handler(event) {
-  if (event.httpMethod === 'OPTIONS') {
-    return {
-      statusCode: 200,
-      headers: {
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Headers': 'Content-Type',
-        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS'
-      },
-      body: ''
-    };
-  }
-
+async function fetchRealDeaths(worldName, minLevel) {
   try {
-    const worldName = event.queryStringParameters?.sever || "Tormentum";
-    const minLevel = parseInt(event.queryStringParameters?.minLevel || "0");
-    const vipOnly = event.queryStringParameters?.vip === 'true';
-
-    const cacheKey = `deaths_${worldName}_${minLevel}_${vipOnly}`;
-    const cached = cache.get(cacheKey);
-    if (cached && Date.now() - cached.timestamp < CACHE_DURATION) {
-      console.log(`✅ Cache hit for world ${worldName}`);
-      return {
-        statusCode: 200,
-        headers: {
-          'Content-Type': 'application/json',
-          'Access-Control-Allow-Origin': '*'
-        },
-        body: JSON.stringify(cached.data)
-      };
-    }
-
-    console.log(`📊 Fetching deaths for world ${worldName}, minLevel=${minLevel}`);
-
-    // Fetch from real Rubinot API with browser-like headers
+    console.log(`🌐 Attempting to fetch real deaths from Rubinot API for ${worldName}...`);
+    
     const response = await fetch('https://rubinot.com.br/deaths', {
       method: 'POST',
       headers: {
@@ -65,7 +56,7 @@ export async function handler(event) {
     });
 
     if (!response.ok) {
-      throw new Error(`Rubinot API returned ${response.status}`);
+      throw new Error(`API returned ${response.status}`);
     }
 
     const apiData = await response.json();
@@ -89,10 +80,63 @@ export async function handler(event) {
       deaths = deaths.filter(d => d.level >= minLevel);
     }
 
-    // Note: vipOnly filter not applicable with current API data
-    // (no VIP status in the response)
-    if (vipOnly) {
-      console.log('⚠️  vipOnly filter not supported by Rubinot API');
+    console.log(`✅ Real API success! Fetched ${deaths.length} deaths for ${worldName}`);
+    return deaths;
+  } catch (err) {
+    console.error(`⚠️  Real API failed: ${err.message} - will use mock data fallback`);
+    return null; // Signal to use mock data
+  }
+}
+
+function getMockDeaths(worldName, minLevel) {
+  console.log(`📦 Using mock deaths fallback for ${worldName}`);
+  
+  let deaths = [...(mockDeathsByWorld[worldName] || [])];
+
+  if (minLevel > 0) {
+    deaths = deaths.filter(d => d.level >= minLevel);
+  }
+
+  return deaths;
+}
+
+export async function handler(event) {
+  if (event.httpMethod === 'OPTIONS') {
+    return {
+      statusCode: 200,
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': 'Content-Type',
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS'
+      },
+      body: ''
+    };
+  }
+
+  try {
+    const worldName = event.queryStringParameters?.sever || "Tormentum";
+    const minLevel = parseInt(event.queryStringParameters?.minLevel || "0");
+
+    const cacheKey = `deaths_${worldName}_${minLevel}`;
+    const cached = cache.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < CACHE_DURATION) {
+      console.log(`✨ Cache hit for ${worldName}`);
+      return {
+        statusCode: 200,
+        headers: {
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*'
+        },
+        body: JSON.stringify(cached.data)
+      };
+    }
+
+    // Try real API first, fallback to mock
+    let deaths = await fetchRealDeaths(worldName, minLevel);
+    
+    if (deaths === null) {
+      // Real API failed, use mock data
+      deaths = getMockDeaths(worldName, minLevel);
     }
 
     cache.set(cacheKey, {
@@ -109,7 +153,7 @@ export async function handler(event) {
       body: JSON.stringify(deaths)
     };
   } catch (err) {
-    console.error("❌ Error:", err.message);
+    console.error("❌ Critical error:", err.message);
     return {
       statusCode: 500,
       headers: {
