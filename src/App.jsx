@@ -120,7 +120,7 @@ function App() {
     return () => clearInterval(timer);
   }, [deaths.length]);
 
-  // Fetch function - calls Netlify function which proxies the real Rubinot API
+  // Fetch function - calls Rubinot API via CORS proxy from the browser
   const fetchDeaths = async () => {
     // Prevent multiple concurrent requests
     if (fetchingRef.current) {
@@ -132,13 +132,13 @@ function App() {
 
       console.log(`📡 Fetching deaths for world ${currentWorld.current}, minLevel=${currentMinLevel.current}...`);
 
-      // Build URL - Netlify function will proxy to real Rubinot API
-      let url = `/.netlify/functions/deaths?sever=${currentWorld.current}`;
-      if (currentMinLevel.current > 0) {
-        url += `&minLevel=${currentMinLevel.current}`;
-      }
+      // Build the real Rubinot API URL
+      const rubinotUrl = `https://rubinot.com.br/api/deaths?world=${currentWorld.current}&page=1&min_level=${currentMinLevel.current}`;
+      
+      // Use CORS proxy to fetch from browser
+      const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(rubinotUrl)}`;
 
-      const res = await fetch(url);
+      const res = await fetch(proxyUrl);
         
       if (!res.ok) {
         throw new Error(`HTTP error! status: ${res.status}`);
@@ -152,7 +152,7 @@ function App() {
         return;
       }
 
-      console.log(`✅ Got ${data.length} deaths`);
+      console.log(`✅ Got ${data.length} deaths from Rubinot`);
 
       // Simple logic: check for new deaths and update state
       const newDeathIds = new Set();
