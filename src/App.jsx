@@ -120,7 +120,7 @@ function App() {
     return () => clearInterval(timer);
   }, [deaths.length]);
 
-  // Fetch function - uses refs to always get latest values
+  // Fetch function - calls Rubinot API directly from the browser
   const fetchDeaths = async () => {
     // Prevent multiple concurrent requests
     if (fetchingRef.current) {
@@ -130,31 +130,66 @@ function App() {
     try {
       fetchingRef.current = true;
 
-      // Build URL with filters (use refs to get latest values)
-      // Note: Using 'sever' to match the new website's query parameter (typo preserved)
-      let url = `/.netlify/functions/deaths?sever=${currentWorld.current}`;
-      if (currentMinLevel.current > 0) {
-        url += `&minLevel=${currentMinLevel.current}`;
-      }
-      if (currentVipOnly.current) {
-        url += `&vip=true`;
-      }
-      
-      const res = await fetch(url);
-        
-        if (!res.ok) {
-          throw new Error(`HTTP error! status: ${res.status}`);
-        }
-        
-        const data = await res.json();
+      // Get the world name from the server ID
+      const server = SERVERS.find(s => s.id === currentWorld.current);
+      const worldName = server?.name || "Tormentum";
 
-        // Handle response - should be a simple array of deaths
-        if (!Array.isArray(data)) {
-          console.error("Invalid response format:", data);
-          return;
-        }
+      console.log(`📡 Fetching real deaths from Rubinot API for ${worldName}...`);
 
-        console.log(`Fetched ${data.length} deaths for world ${currentWorld.current}`);
+      // Call Rubinot API directly from the browser
+      const res = await fetch('https://rubinot.com.br/deaths', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'text/plain;charset=UTF-8',
+        },
+        body: '{}'
+      });
+        
+      if (!res.ok) {
+        throw new Error(`API error: ${res.status}`);
+      }
+        
+      const apiData = await res.json();
+
+      // Parse the API response
+      if (!apiData.deaths || !Array.isArray(apiData.deaths)) {
+        console.error("Invalid response format:", apiData);
+        return;
+      }
+
+      // Format time from unix timestamp
+      const formatTime = (unixTimestamp) => {
+        const date = new Date(parseInt(unixTimestamp) * 1000);
+        const day = String(date.getDate()).padStart(2, '0');
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const year = date.getFullYear();
+        const hours = String(date.getHours()).padStart(2, '0');
+        const minutes = String(date.getMinutes()).padStart(2, '0');
+        const seconds = String(date.getSeconds()).padStart(2, '0');
+        return `${day}.${month}.${year}, ${hours}:${minutes}:${seconds}`;
+      };
+
+      // Transform and filter the data
+      let data = apiData.deaths
+        .filter(d => d.worldName === worldName) // Filter by selected world
+        .map(d => ({
+          player: d.victim,
+          level: d.level,
+          cause: d.killed_by,
+          time: formatTime(d.time),
+          worldName: d.worldName,
+          vocation: "Unknown", // API doesn't provide vocation
+          accountability: d.is_player ? "Player" : "Monster",
+          accountStatus: "Free Account" // API doesn't provide this
+        }));
+
+      console.log(`✅ Got ${data.length} deaths for ${worldName}`);
+
+      // Handle response 
+      if (!Array.isArray(data)) {
+        console.error("Invalid response format:", data);
+        return;
+      }
 
         // Simple logic: check for new deaths and update state
         const newDeathIds = new Set();
@@ -166,13 +201,11 @@ function App() {
             const id = d.player + d.time;
             
             // CLIENT-SIDE FILTER SAFETY NET: Double-check filters
-            // This prevents stale cache data from showing wrong results
             const levelMatch = d.level >= currentMinLevel.current;
-            const vipMatch = !currentVipOnly.current || (d.accountStatus && d.accountStatus.toLowerCase().includes("vip"));
+            const vipMatch = !currentVipOnly.current; // No VIP data available from API
             
             // Only process deaths that match current filters
             if (!levelMatch || !vipMatch) {
-              console.log(`Filtered out death: ${d.player} (Level: ${d.level}, VIP: ${d.accountStatus}) - Filters: Level ${currentMinLevel.current}+, VIP: ${currentVipOnly.current}`);
               return; // Skip this death
             }
             
