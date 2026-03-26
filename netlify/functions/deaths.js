@@ -1,5 +1,6 @@
 // Netlify function with Puppeteer for dynamic content - optimized for new Rubinot site
 import puppeteer from 'puppeteer';
+import chromium from '@sparticuz/chromium';
 
 const cache = new Map();
 const characterCache = new Map();
@@ -47,19 +48,16 @@ async function getBrowser() {
   browserLaunching = true;
   try {
     console.log('🚀 Launching browser...');
+    
+    // Use sparticuz chromium for Netlify/Lambda environments
+    const executablePath = await chromium.executablePath();
+    console.log(`📍 Using Chromium from: ${executablePath}`);
+    
     sharedBrowser = await puppeteer.launch({
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-gpu',
-        '--single-process',
-        '--disable-blink-features=AutomationControlled',
-        '--disable-web-resources',
-        '--disable-default-apps',
-        '--disable-extensions',
-      ],
-      headless: 'new',
+      args: chromium.args,
+      defaultViewport: chromium.defaultViewport,
+      executablePath: executablePath,
+      headless: chromium.headless,
       timeout: 20000,
     });
     browserLaunching = false;
