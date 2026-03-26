@@ -1,89 +1,147 @@
-// Netlify function with better headers to bypass bot detection
+// Netlify function with Puppeteer for dynamic content - optimized for new Rubinot site
+import puppeteer from 'puppeteer';
+import StealthPlugin from 'puppeteer-extra-plugin-stealth';
+
+puppeteer.use(StealthPlugin());
+
 const cache = new Map();
 const characterCache = new Map();
-const CACHE_DURATION = 2000;
-const CHARACTER_CACHE_DURATION = 3600000;
+const CACHE_DURATION = 3000; // 3 seconds for deaths
+const CHARACTER_CACHE_DURATION = 7200000; // 2 hours for character data
 
+let sharedBrowser = null;
+let browserLaunching = false;
+
+// Cleanup interval
 setInterval(() => {
   const now = Date.now();
   for (const [key, value] of cache.entries()) {
-    if (now - value.timestamp > CACHE_DURATION * 2) {
+    if (now - value.timestamp > CACHE_DURATION * 3) {
       cache.delete(key);
     }
   }
-  if (characterCache.size > 500) {
+  if (characterCache.size > 200) {
     const entries = Array.from(characterCache.entries());
     entries.sort((a, b) => a[1].timestamp - b[1].timestamp);
-    entries.slice(0, 100).forEach(([key]) => characterCache.delete(key));
+    entries.slice(0, 50).forEach(([key]) => characterCache.delete(key));
   }
-}, 10000);
+}, 30000);
 
-function parseDeathsTable(html) {
-  const deaths = [];
-  const tableMatch = html.match(/<table[^>]*class="TableContent"[^>]*>([\s\S]*?)<\/table>/i);
-  if (!tableMatch) return deaths;
-  
-  const tableContent = tableMatch[1];
-  const rowRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
-  let rowMatch;
-  
-  while ((rowMatch = rowRegex.exec(tableContent)) !== null) {
-    const rowHtml = rowMatch[1];
-    const cells = [];
-    const cellRegex = /<td[^>]*>([\s\S]*?)<\/td>/gi;
-    let cellMatch;
-    
-    while ((cellMatch = cellRegex.exec(rowHtml)) !== null) {
-      cells.push(cellMatch[1]);
+// Get or create browser (Netlify compatible)
+async function getBrowser() {
+  if (sharedBrowser) {
+    try {
+      if (sharedBrowser.isConnected()) {
+        console.log('♻️  Reusing browser');
+        return sharedBrowser;
+      }
+    } catch (e) {
+      console.log('🔄 Browser disconnected');
+      sharedBrowser = null;
     }
+  }
+  
+  if (browserLaunching) {
+    console.log('⏳ Waiting for browser...');
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    return getBrowser();
+  }
+  
+  browserLaunching = true;
+  try {
+    console.log('🚀 Launching browser...');
+    sharedBrowser = await puppeteer.launch({
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+        '--single-process',
+      ],
+      headless: 'new',
+      timeout: 20000,
+    });
+    browserLaunching = false;
+    return sharedBrowser;
+  } catch (error) {
+    browserLaunching = false;
+    throw error;
+  }
+}
+
+// Parse deaths from DOM (new structure)
+async function extractDeathsFromPage(page) {
+  const deaths = await page.evaluate(() => {
+    const rows = document.querySelectorAll("table tbody tr");
+    const deathsList = [];
+    let count = 0;
+    const MAX_DEATHS = 10;
     
-    if (cells.length >= 3) {
-      const time = cells[1].replace(/<[^>]*>/g, '').trim();
-      const playerLinkMatch = cells[2].match(/<a[^>]*href="([^"]*)"[^>]*>([^<]*)<\/a>/i);
-      if (!playerLinkMatch) continue;
+    for (let i = 0; i < rows.length && count < MAX_DEATHS; i++) {
+      const row = rows[i];
+      const cells = row.querySelectorAll("td");
       
-      const playerLink = 'https://rubinot.com.br/' + playerLinkMatch[1].replace(/^\.\/\?/, '?');
-      const player = playerLinkMatch[2].trim();
+      if (cells.length < 3) continue;
       
-      const fullText = cells[2].replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
-      const levelMatch = fullText.match(/level\s+(\d+)/i);
-      if (!levelMatch) continue;
+      // Extract data - adjust selectors based on new table structure
+      const time = cells[1]?.innerText.trim() || '';
+      const playerLink = cells[2]?.querySelector("a")?.href || '';
+      const player = cells[2]?.querySelector("a")?.innerText.trim() || '';
+      
+      const fullText = cells[2]?.innerText.replace(/\s+/g, ' ') || '';
+      const levelMatch = fullText.match(/level\s*(\d+)/i);
+      
+      if (!levelMatch || !player) continue;
       
       const level = parseInt(levelMatch[1]);
-      const causeMatch = fullText.match(/level\s+\d+\s+by\s+(.+?)\.?\s*$/i);
-      const cause = causeMatch ? causeMatch[1].trim() : 'unknown';
+      let cause = fullText.replace(/^.*?died at level \d+ by\s+/i, '').replace(/\.$/, '');
       
-      deaths.push({ player, playerLink, level, cause, time });
+      if (cause && player && playerLink) {
+        deathsList.push({ player, playerLink, level, cause, time });
+        count++;
+      }
     }
-  }
+    
+    return deathsList;
+  });
   
   return deaths;
 }
 
-function parseCharacterData(html) {
-  const data = {
-    vocation: 'Unknown',
-    residence: 'Unknown',
-    accountStatus: 'Free Account',
-    guild: 'No Guild'
-  };
-  
-  const vocationMatch = html.match(/<b>Vocation:<\/b><\/td>\s*<td>([^<]+)/i);
-  if (vocationMatch) data.vocation = vocationMatch[1].trim();
-  
-  const residenceMatch = html.match(/<b>Residence:<\/b><\/td>\s*<td>([^<]+)/i);
-  if (residenceMatch) data.residence = residenceMatch[1].trim();
-  
-  const accountMatch = html.match(/<b>Account\s+status:<\/b><\/td>\s*<td>[\s\S]*?<b>([^<]+)<\/b>/i);
-  if (accountMatch) data.accountStatus = accountMatch[1].trim();
-  
-  const guildMatch = html.match(/<b>Guild:<\/b><\/td>\s*<td>Member of the <a[^>]*>([^<]+)<\/a>/i);
-  if (guildMatch) data.guild = guildMatch[1].trim();
+// Extract character data from DOM (new structure)
+async function extractCharacterFromPage(page) {
+  const data = await page.evaluate(() => {
+    const info = {
+      vocation: 'Unknown',
+      residence: 'Unknown',
+      accountStatus: 'Free Account',
+      guild: 'No Guild'
+    };
+    
+    // Look for character info in various possible structures
+    const rows = document.querySelectorAll("table td");
+    const text = Array.from(rows).map(el => el.textContent).join(' ');
+    
+    const vocMatch = text.match(/Vocation:\s*([^\n]+)/i);
+    if (vocMatch) info.vocation = vocMatch[1].trim();
+    
+    const resMatch = text.match(/Residence:\s*([^\n]+)/i);
+    if (resMatch) info.residence = resMatch[1].trim();
+    
+    const accMatch = text.match(/Account\s+Status:\s*([^\n]+)/i);
+    if (accMatch) info.accountStatus = accMatch[1].trim();
+    
+    const guildMatch = text.match(/Guild:\s*([^\n]+)/i);
+    if (guildMatch) info.guild = guildMatch[1].trim();
+    
+    return info;
+  });
   
   return data;
 }
 
 export async function handler(event) {
+  // Handle CORS
   if (event.httpMethod === 'OPTIONS') {
     return {
       statusCode: 200,
@@ -96,12 +154,15 @@ export async function handler(event) {
     };
   }
 
-  const worldId = event.queryStringParameters?.world || "20";
-  const url = `https://rubinot.com.br/?subtopic=latestdeaths&world=${worldId}`;
+  // Get server id from query param (note: typo in URL is "sever" not "server")
+  const serverId = event.queryStringParameters?.sever || "20";
+  const url = `https://rubinot.com.br/deaths?sever=${serverId}`;
 
-  const cacheKey = `deaths_${worldId}_v3`;
+  // Check cache
+  const cacheKey = `deaths_${serverId}_v4`;
   const cached = cache.get(cacheKey);
   if (cached && Date.now() - cached.timestamp < CACHE_DURATION) {
+    console.log(`✅ Cache hit for server ${serverId}`);
     return {
       statusCode: 200,
       headers: {
@@ -112,75 +173,122 @@ export async function handler(event) {
     };
   }
 
+  let page = null;
+  let browser = null;
+
   try {
-    // Better headers to look more like a real browser
-    const response = await fetch(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.5',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'Connection': 'keep-alive',
-        'Upgrade-Insecure-Requests': '1',
-        'Sec-Fetch-Dest': 'document',
-        'Sec-Fetch-Mode': 'navigate',
-        'Sec-Fetch-Site': 'none',
-        'Cache-Control': 'max-age=0'
-      }
+    console.log(`🌐 Fetching deaths for server ${serverId}...`);
+    
+    browser = await getBrowser();
+    page = await browser.newPage();
+    
+    // Set viewport to reduce memory
+    await page.setViewport({ width: 1024, height: 768 });
+    
+    // Navigate to the deaths page
+    await page.goto(url, { 
+      waitUntil: "networkidle2",
+      timeout: 25000 
     });
     
-    if (!response.ok) {
-      throw new Error(`Failed to fetch deaths: ${response.status}`);
+    // Wait for the deaths table to appear
+    // Adjust selector based on actual table structure
+    try {
+      await page.waitForSelector("table tbody tr", { timeout: 10000 });
+    } catch (e) {
+      console.warn("⚠️  Table selector not found, extracting available content...");
     }
     
-    const html = await response.text();
-    const deaths = parseDeathsTable(html);
+    // Extract deaths from the page
+    const deaths = await extractDeathsFromPage(page);
+    console.log(`✅ Parsed ${deaths.length} deaths from server ${serverId}`);
+    
+    if (deaths.length === 0) {
+      throw new Error("No deaths found - page structure may have changed");
+    }
 
+    // Fetch character data for latest 5 deaths
     const latestDeaths = deaths.slice(0, 5);
     const deathsWithCharacterData = [];
+    let cacheHits = 0;
+    let cacheMisses = 0;
 
-    for (const death of latestDeaths) {
+    for (let i = 0; i < latestDeaths.length; i++) {
+      const death = latestDeaths[i];
       const charCacheKey = `char_${death.player.toLowerCase()}`;
-      const cachedChar = characterCache.get(charCacheKey);
       
+      // Check character cache
+      const cachedChar = characterCache.get(charCacheKey);
       if (cachedChar && Date.now() - cachedChar.timestamp < CHARACTER_CACHE_DURATION) {
+        console.log(`✓ ${death.player} (cached)`);
+        cacheHits++;
         deathsWithCharacterData.push({ ...death, ...cachedChar.data });
         continue;
       }
       
       try {
-        const charResponse = await fetch(death.playerLink, {
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5',
-            'Referer': 'https://rubinot.com.br/',
-            'Connection': 'keep-alive'
-          }
+        console.log(`✗ ${death.player} (fetching)`);
+        cacheMisses++;
+        
+        // Build character URL from player name
+        const charUrl = `https://rubinot.com.br/characters?name=${encodeURIComponent(death.player)}`;
+        
+        await page.goto(charUrl, {
+          waitUntil: "networkidle2",
+          timeout: 15000
         });
         
-        if (!charResponse.ok) throw new Error(`Failed to fetch character: ${charResponse.status}`);
+        // Wait for character info to load
+        try {
+          await page.waitForSelector("table", { timeout: 5000 });
+        } catch (e) {
+          console.warn(`⚠️  Character table not found for ${death.player}`);
+        }
         
-        const charHtml = await charResponse.text();
-        const charData = parseCharacterData(charHtml);
+        // Extract character data
+        const charData = await extractCharacterFromPage(page);
         
-        characterCache.set(charCacheKey, { data: charData, timestamp: Date.now() });
+        // Cache the character data
+        characterCache.set(charCacheKey, {
+          data: charData,
+          timestamp: Date.now()
+        });
+        
         deathsWithCharacterData.push({ ...death, ...charData });
         
-        await new Promise(resolve => setTimeout(resolve, 200));
+        // Small delay between character fetches
+        if (i < latestDeaths.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+        
       } catch (error) {
-        console.error(`Error fetching ${death.player}:`, error.message);
+        console.error(`❌ ${death.player}: ${error.message}`);
         deathsWithCharacterData.push({
           ...death,
-          vocation: 'Unknown',
-          residence: 'Unknown',
-          accountStatus: 'Free Account',
-          guild: 'No Guild'
+          vocation: "Unknown",
+          residence: "Unknown",
+          accountStatus: "Free Account",
+          guild: "No Guild"
         });
       }
     }
 
-    cache.set(cacheKey, { data: deathsWithCharacterData, timestamp: Date.now() });
+    console.log(`✅ Complete: ${deathsWithCharacterData.length} deaths (${cacheHits} cached, ${cacheMisses} fetched)`);
+
+    // Close page but keep browser alive
+    if (page) {
+      try {
+        await page.close();
+      } catch (e) {
+        // Ignore
+      }
+    }
+
+    // Cache results
+    cache.set(cacheKey, {
+      data: deathsWithCharacterData,
+      timestamp: Date.now()
+    });
 
     return {
       statusCode: 200,
@@ -192,7 +300,21 @@ export async function handler(event) {
     };
     
   } catch (err) {
-    console.error("Error:", err);
+    console.error("❌ Error:", err.message);
+    
+    if (page) {
+      try {
+        await page.close();
+      } catch (e) {
+        // Ignore
+      }
+    }
+    
+    // Reset browser on complete failure
+    if (browser && !browser.isConnected()) {
+      sharedBrowser = null;
+    }
+    
     return {
       statusCode: 500,
       headers: {

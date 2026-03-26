@@ -131,7 +131,8 @@ function App() {
       fetchingRef.current = true;
 
       // Build URL with filters (use refs to get latest values)
-      let url = `/api/deaths?world=${currentWorld.current}`;
+      // Note: Using 'sever' to match the new website's query parameter (typo preserved)
+      let url = `/.netlify/functions/deaths?sever=${currentWorld.current}`;
       if (currentMinLevel.current > 0) {
         url += `&minLevel=${currentMinLevel.current}`;
       }
