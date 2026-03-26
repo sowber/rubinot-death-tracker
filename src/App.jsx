@@ -120,7 +120,7 @@ function App() {
     return () => clearInterval(timer);
   }, [deaths.length]);
 
-  // Fetch function - calls Netlify function which proxies to real Rubinot API
+  // Fetch function - tries local Puppeteer server first, falls back to Netlify
   const fetchDeaths = async () => {
     // Prevent multiple concurrent requests
     if (fetchingRef.current) {
@@ -132,8 +132,45 @@ function App() {
 
       console.log(`📡 Fetching deaths for world ${currentWorld.current}, minLevel=${currentMinLevel.current}...`);
 
-      // Build URL for Netlify function
-      let url = `/.netlify/functions/deaths?sever=${currentWorld.current}&minLevel=${currentMinLevel.current}&page=1`;
+      // Try local Puppeteer server first (real data if available)
+      try {
+        console.log(`🔗 Trying local server at http://localhost:3001...`);
+        const localUrl = `http://localhost:3001/api/deaths?world=${currentWorld.current}&min_level=${currentMinLevel.current}&page=1`;
+        const localRes = await Promise.race([
+          fetch(localUrl),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 3000))
+        ]);
+        
+        if (localRes.ok) {
+          const data = await localRes.json();
+          console.log(`✅ Got ${data.length} deaths from LOCAL Puppeteer server!`);
+          
+          // Use the local data
+          const newDeathIds = new Set();
+          setDeaths(prevDeaths => {
+            const filtered = data.filter(d => d.level >= currentMinLevel.current).slice(0, 3);
+            filtered.forEach(d => {
+              const id = d.player + d.time;
+              if (!latestIds.current.has(id)) {
+                latestIds.current.add(id);
+                if (prevDeaths.length > 0) newDeathIds.add(id);
+              }
+            });
+            return filtered;
+          });
+          setNewDeaths(newDeathIds);
+          setIsLoadingServer(false);
+          if (newDeathIds.size > 0) {
+            setTimeout(() => setNewDeaths(new Set()), 3000);
+          }
+          return;
+        }
+      } catch (localErr) {
+        console.log(`⚠️  Local server unavailable, falling back to Netlify...`);
+      }
+
+      // Fallback to Netlify function (uses mock data)
+      const url = `/.netlify/functions/deaths?sever=${currentWorld.current}&minLevel=${currentMinLevel.current}&page=1`;
 
       console.log(`🔗 Calling: ${url}`);
       const res = await fetch(url);
