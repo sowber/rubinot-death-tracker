@@ -120,7 +120,7 @@ function App() {
     return () => clearInterval(timer);
   }, [deaths.length]);
 
-  // Fetch function - calls Rubinot API directly from the browser
+  // Fetch function - calls Netlify function which proxies the real Rubinot API
   const fetchDeaths = async () => {
     // Prevent multiple concurrent requests
     if (fetchingRef.current) {
@@ -130,126 +130,88 @@ function App() {
     try {
       fetchingRef.current = true;
 
-      // Get the world name from the server ID
-      const server = SERVERS.find(s => s.id === currentWorld.current);
-      const worldName = server?.name || "Tormentum";
+      console.log(`📡 Fetching deaths for world ${currentWorld.current}, minLevel=${currentMinLevel.current}...`);
 
-      console.log(`📡 Fetching real deaths from Rubinot API for ${worldName}...`);
+      // Build URL - Netlify function will proxy to real Rubinot API
+      let url = `/.netlify/functions/deaths?sever=${currentWorld.current}`;
+      if (currentMinLevel.current > 0) {
+        url += `&minLevel=${currentMinLevel.current}`;
+      }
 
-      // Call Rubinot API directly from the browser
-      const res = await fetch('https://rubinot.com.br/deaths', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'text/plain;charset=UTF-8',
-        },
-        body: '{}'
-      });
+      const res = await fetch(url);
         
       if (!res.ok) {
-        throw new Error(`API error: ${res.status}`);
+        throw new Error(`HTTP error! status: ${res.status}`);
       }
         
-      const apiData = await res.json();
+      const data = await res.json();
 
-      // Parse the API response
-      if (!apiData.deaths || !Array.isArray(apiData.deaths)) {
-        console.error("Invalid response format:", apiData);
-        return;
-      }
-
-      // Format time from unix timestamp
-      const formatTime = (unixTimestamp) => {
-        const date = new Date(parseInt(unixTimestamp) * 1000);
-        const day = String(date.getDate()).padStart(2, '0');
-        const month = String(date.getMonth() + 1).padStart(2, '0');
-        const year = date.getFullYear();
-        const hours = String(date.getHours()).padStart(2, '0');
-        const minutes = String(date.getMinutes()).padStart(2, '0');
-        const seconds = String(date.getSeconds()).padStart(2, '0');
-        return `${day}.${month}.${year}, ${hours}:${minutes}:${seconds}`;
-      };
-
-      // Transform and filter the data
-      let data = apiData.deaths
-        .filter(d => d.worldName === worldName) // Filter by selected world
-        .map(d => ({
-          player: d.victim,
-          level: d.level,
-          cause: d.killed_by,
-          time: formatTime(d.time),
-          worldName: d.worldName,
-          vocation: "Unknown", // API doesn't provide vocation
-          accountability: d.is_player ? "Player" : "Monster",
-          accountStatus: "Free Account" // API doesn't provide this
-        }));
-
-      console.log(`✅ Got ${data.length} deaths for ${worldName}`);
-
-      // Handle response 
+      // Handle response - should be a simple array of deaths
       if (!Array.isArray(data)) {
         console.error("Invalid response format:", data);
         return;
       }
 
-        // Simple logic: check for new deaths and update state
-        const newDeathIds = new Set();
+      console.log(`✅ Got ${data.length} deaths`);
 
-        setDeaths(prevDeaths => {
-          const updatedDeaths = [];
+      // Simple logic: check for new deaths and update state
+      const newDeathIds = new Set();
+
+      setDeaths(prevDeaths => {
+        const updatedDeaths = [];
+        
+        data.forEach(d => {
+          const id = d.player + d.time;
           
-          data.forEach(d => {
-            const id = d.player + d.time;
+          // CLIENT-SIDE FILTER SAFETY NET: Double-check filters
+          const levelMatch = d.level >= currentMinLevel.current;
+          
+          // Only process deaths that match current filters
+          if (!levelMatch) {
+            return; // Skip this death
+          }
+          
+          // Check if this is a new death
+          if (!latestIds.current.has(id)) {
+            latestIds.current.add(id);
             
-            // CLIENT-SIDE FILTER SAFETY NET: Double-check filters
-            const levelMatch = d.level >= currentMinLevel.current;
-            const vipMatch = !currentVipOnly.current; // No VIP data available from API
-            
-            // Only process deaths that match current filters
-            if (!levelMatch || !vipMatch) {
-              return; // Skip this death
+            // Only mark as new if we already have deaths (not first load)
+            if (prevDeaths.length > 0) {
+              newDeathIds.add(id);
             }
             
-            // Check if this is a new death
-            if (!latestIds.current.has(id)) {
-              latestIds.current.add(id);
-              
-              // Only mark as new if we already have deaths (not first load)
-              if (prevDeaths.length > 0) {
-                newDeathIds.add(id);
-              }
-              
-              // Memory optimization: limit latestIds to 50 most recent
-              if (latestIds.current.size > 50) {
-                const idsArray = Array.from(latestIds.current);
-                latestIds.current = new Set(idsArray.slice(-50));
-              }
+            // Memory optimization: limit latestIds to 50 most recent
+            if (latestIds.current.size > 50) {
+              const idsArray = Array.from(latestIds.current);
+              latestIds.current = new Set(idsArray.slice(-50));
             }
-            
-            updatedDeaths.push(d);
-          });
-
-          // Keep only the latest 3 deaths for maximum speed
-          return updatedDeaths.slice(0, 3);
+          }
+          
+          updatedDeaths.push(d);
         });
 
-        setNewDeaths(newDeathIds);
+        // Keep only the latest 3 deaths for maximum speed
+        return updatedDeaths.slice(0, 3);
+      });
+
+      setNewDeaths(newDeathIds);
         
-        // Clear loading state after data is set
-        setIsLoadingServer(false);
+      // Clear loading state after data is set
+      setIsLoadingServer(false);
 
-        // Remove new death animation after 3 seconds
-        if (newDeathIds.size > 0) {
-          setTimeout(() => {
-            setNewDeaths(new Set());
-          }, 3000);
-        }
-
-      } catch (err) {
-        console.error("Error fetching deaths:", err);
-        setIsLoadingServer(false);
-      } finally {
-        fetchingRef.current = false;
+      // Remove new death animation after 3 seconds
+      if (newDeathIds.size > 0) {
+        setTimeout(() => {
+          setNewDeaths(new Set());
+        }, 3000);
       }
+
+    } catch (err) {
+      console.error("Error fetching deaths:", err);
+      setIsLoadingServer(false);
+    } finally {
+      fetchingRef.current = false;
+    }
   };
 
   // Handle server/filter changes - only clear and restart for world changes

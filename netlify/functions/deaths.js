@@ -69,24 +69,20 @@ function formatTime(unixTimestamp) {
   return `${day}.${month}.${year}, ${hours}:${minutes}:${seconds}`;
 }
 
-async function fetchRealDeaths(worldName, minLevel) {
+// Fetch from the real Rubinot API endpoint
+async function fetchRealDeaths(worldId, minLevel, page = 1) {
   try {
-    console.log(`🌐 Attempting to fetch real deaths from Rubinot API for ${worldName}...`);
+    console.log(`🌐 Fetching from Rubinot API: world=${worldId}, minLevel=${minLevel}, page=${page}`);
     
-    const response = await fetch('https://rubinot.com.br/deaths', {
-      method: 'POST',
+    const url = `https://rubinot.com.br/api/deaths?world=${worldId}&page=${page}&min_level=${minLevel}`;
+    
+    const response = await fetch(url, {
+      method: 'GET',
       headers: {
-        'Content-Type': 'text/plain;charset=UTF-8',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36',
-        'Referer': 'https://rubinot.com.br/deaths',
-        'Origin': 'https://rubinot.com.br',
         'Accept': 'application/json',
-        'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
-        'Sec-Fetch-Dest': 'empty',
-        'Sec-Fetch-Mode': 'cors',
-        'Sec-Fetch-Site': 'same-origin'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
       },
-      body: '{}'
+      credentials: 'include'
     });
 
     if (!response.ok) {
@@ -94,36 +90,11 @@ async function fetchRealDeaths(worldName, minLevel) {
     }
 
     const apiData = await response.json();
-    console.log(`📦 Raw API response:`, JSON.stringify(apiData).substring(0, 200));
-    console.log(`📋 Deaths count in response:`, apiData.deaths?.length || 0);
-
-    let deaths = (apiData.deaths || []).map(d => ({
-      player: d.victim,
-      level: d.level,
-      cause: d.killed_by,
-      time: formatTime(d.time),
-      worldName: d.worldName,
-      isPlayer: d.is_player === 1,
-      mostDamageBy: d.mostdamage_by,
-      mostDamageIsPlayer: d.mostdamage_is_player === 1
-    }));
-
-    console.log(`🔍 Deaths before filtering:`, deaths.length);
-
-    // Filter by world
-    deaths = deaths.filter(d => d.worldName === worldName);
-    console.log(`🔍 Deaths after world filter (${worldName}):`, deaths.length);
-
-    // Filter by level
-    if (minLevel > 0) {
-      deaths = deaths.filter(d => d.level >= minLevel);
-      console.log(`🔍 Deaths after level filter (${minLevel}):`, deaths.length);
-    }
-
-    console.log(`✅ Real API success! Fetched ${deaths.length} deaths for ${worldName}`);
-    return deaths;
+    console.log(`✅ Real API success! Got ${apiData.length || 0} deaths`);
+    
+    return apiData;
   } catch (err) {
-    console.error(`⚠️  Real API failed: ${err.message} - will use mock data fallback`);
+    console.error(`⚠️  Real API failed: ${err.message}`);
     return null; // Signal to use mock data
   }
 }
@@ -154,13 +125,14 @@ export async function handler(event) {
   }
 
   try {
-    const worldName = event.queryStringParameters?.sever || "Tormentum";
+    const worldId = event.queryStringParameters?.sever || "20"; // Tormentum default
     const minLevel = parseInt(event.queryStringParameters?.minLevel || "0");
+    const page = parseInt(event.queryStringParameters?.page || "1");
 
-    const cacheKey = `deaths_${worldName}_${minLevel}`;
+    const cacheKey = `deaths_${worldId}_${minLevel}_${page}`;
     const cached = cache.get(cacheKey);
     if (cached && Date.now() - cached.timestamp < CACHE_DURATION) {
-      console.log(`✨ Cache hit for ${worldName}`);
+      console.log(`✨ Cache hit for world ${worldId}`);
       return {
         statusCode: 200,
         headers: {
@@ -171,12 +143,19 @@ export async function handler(event) {
       };
     }
 
-    // Try real API first, fallback to mock
-    let deaths = await fetchRealDeaths(worldName, minLevel);
+    // Try real API first
+    let deaths = await fetchRealDeaths(worldId, minLevel, page);
     
     if (deaths === null) {
       // Real API failed, use mock data
-      deaths = getMockDeaths(worldName, minLevel);
+      console.log(`📦 Using mock deaths fallback for world ${worldId}`);
+      deaths = getMockDeaths(worldId, minLevel);
+    } else if (!Array.isArray(deaths)) {
+      // Response might not be an array, try to extract deaths
+      deaths = deaths.deaths || deaths;
+      if (!Array.isArray(deaths)) {
+        deaths = [];
+      }
     }
 
     cache.set(cacheKey, {
