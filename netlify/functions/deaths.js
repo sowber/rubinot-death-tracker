@@ -1,8 +1,11 @@
 // Netlify function with Puppeteer for dynamic content - optimized for new Rubinot site
-import puppeteer from 'puppeteer';
+import PuppeteerExtra from 'puppeteer-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 
-puppeteer.use(StealthPlugin());
+// Apply stealth plugin to puppeteer-extra
+PuppeteerExtra.use(StealthPlugin());
+
+const puppeteer = PuppeteerExtra;
 
 const cache = new Map();
 const characterCache = new Map();
