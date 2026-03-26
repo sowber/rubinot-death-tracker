@@ -1,11 +1,5 @@
 // Netlify function with Puppeteer for dynamic content - optimized for new Rubinot site
-import PuppeteerExtra from 'puppeteer-extra';
-import StealthPlugin from 'puppeteer-extra-plugin-stealth';
-
-// Apply stealth plugin to puppeteer-extra
-PuppeteerExtra.use(StealthPlugin());
-
-const puppeteer = PuppeteerExtra;
+import puppeteer from 'puppeteer';
 
 const cache = new Map();
 const characterCache = new Map();
@@ -60,6 +54,10 @@ async function getBrowser() {
         '--disable-dev-shm-usage',
         '--disable-gpu',
         '--single-process',
+        '--disable-blink-features=AutomationControlled',
+        '--disable-web-resources',
+        '--disable-default-apps',
+        '--disable-extensions',
       ],
       headless: 'new',
       timeout: 20000,
@@ -219,8 +217,25 @@ export async function handler(event) {
     // Set viewport to reduce memory
     await page.setViewport({ width: 1024, height: 768 });
     
-    // Set user agent and headers to look like real browser
+    // Set realistic user agent
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+    
+    // Set extra headers to look like real browser
+    await page.setExtraHTTPHeaders({
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+      'Accept-Encoding': 'gzip, deflate, br',
+      'DNT': '1',
+      'Connection': 'keep-alive',
+      'Upgrade-Insecure-Requests': '1',
+    });
+    
+    // Remove webdriver property
+    await page.evaluateOnNewDocument(() => {
+      Object.defineProperty(navigator, 'webdriver', {
+        get: () => false,
+      });
+    });
     
     // Navigate to the deaths page
     console.log("🌐 Navigating with Puppeteer...");
