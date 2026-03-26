@@ -72,7 +72,30 @@ async function getBrowser() {
 // Parse deaths from DOM (new structure)
 async function extractDeathsFromPage(page) {
   const deaths = await page.evaluate(() => {
-    const rows = document.querySelectorAll("table tbody tr");
+    // DEBUG: Log available selectors
+    const debug = {
+      tablesFound: document.querySelectorAll("table").length,
+      tbodyFound: document.querySelectorAll("tbody").length,
+      allRows: document.querySelectorAll("tr").length,
+      tableBodyRows: document.querySelectorAll("table tbody tr").length,
+    };
+    
+    console.log("DEBUG selectors:", JSON.stringify(debug));
+    
+    // Try multiple selector strategies
+    let rows = document.querySelectorAll("table tbody tr");
+    
+    // If no rows found with standard selector, try alternatives
+    if (rows.length === 0) {
+      console.log("Standard selector returned 0, trying alternatives...");
+      rows = document.querySelectorAll("table tr:not(:first-child)");
+    }
+    if (rows.length === 0) {
+      rows = document.querySelectorAll("tr");
+    }
+    
+    console.log("Using rows count:", rows.length);
+    
     const deathsList = [];
     let count = 0;
     const MAX_DEATHS = 10;
@@ -84,11 +107,11 @@ async function extractDeathsFromPage(page) {
       if (cells.length < 3) continue;
       
       // Extract data - adjust selectors based on new table structure
-      const time = cells[1]?.innerText.trim() || '';
+      const time = cells[1]?.innerText?.trim() || '';
       const playerLink = cells[2]?.querySelector("a")?.href || '';
-      const player = cells[2]?.querySelector("a")?.innerText.trim() || '';
+      const player = cells[2]?.querySelector("a")?.innerText?.trim() || '';
       
-      const fullText = cells[2]?.innerText.replace(/\s+/g, ' ') || '';
+      const fullText = cells[2]?.innerText?.replace(/\s+/g, ' ') || '';
       const levelMatch = fullText.match(/level\s*(\d+)/i);
       
       if (!levelMatch || !player) continue;
@@ -100,6 +123,11 @@ async function extractDeathsFromPage(page) {
         deathsList.push({ player, playerLink, level, cause, time });
         count++;
       }
+    }
+    
+    if (deathsList.length === 0) {
+      // Log HTML for debugging
+      console.log("First 2000 chars of body:", document.body.innerHTML.substring(0, 2000));
     }
     
     return deathsList;
@@ -301,6 +329,7 @@ export async function handler(event) {
     
   } catch (err) {
     console.error("❌ Error:", err.message);
+    console.error("Stack trace:", err.stack);
     
     if (page) {
       try {
@@ -315,13 +344,18 @@ export async function handler(event) {
       sharedBrowser = null;
     }
     
+    // Return detailed error info
     return {
       statusCode: 500,
       headers: {
         'Content-Type': 'application/json',
         'Access-Control-Allow-Origin': '*'
       },
-      body: JSON.stringify({ error: err.message })
+      body: JSON.stringify({ 
+        error: err.message,
+        stack: err.stack,
+        type: err.constructor.name
+      })
     };
   }
 }
