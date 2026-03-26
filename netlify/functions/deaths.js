@@ -210,158 +210,133 @@ export async function handler(event) {
   try {
     console.log(`🌐 Fetching deaths for server ${serverId}...`);
     
-    // First, try simple fetch to see if page has content
-    console.log("🔍 Attempting initial fetch...");
-    const initialResponse = await fetch(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
-      },
-      timeout: 10000
+    // Skip initial fetch - go straight to Puppeteer (real browser, bypasses bot detection)
+    console.log("🤖 Using Puppeteer for full browser rendering...");
+    
+    browser = await getBrowser();
+    page = await browser.newPage();
+    
+    // Set viewport to reduce memory
+    await page.setViewport({ width: 1024, height: 768 });
+    
+    // Set user agent and headers to look like real browser
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+    
+    // Navigate to the deaths page
+    console.log("🌐 Navigating with Puppeteer...");
+    await page.goto(url, { 
+      waitUntil: "networkidle2",
+      timeout: 25000 
     });
     
-    if (!initialResponse.ok) {
-      throw new Error(`Initial fetch failed: ${initialResponse.status}`);
+    console.log("✅ Page loaded, waiting for table...");
+    
+    // Wait for the deaths table to appear
+    try {
+      await page.waitForSelector("table tbody tr", { timeout: 10000 });
+    } catch (e) {
+      console.warn("⚠️ Table selector not found, extracting available content...");
     }
     
-    const initialHtml = await initialResponse.text();
-    console.log(`📄 Initial fetch got ${initialHtml.length} chars`);
+    // Extract deaths from the page
+    const deaths = await extractDeathsFromPage(page);
+    console.log(`✅ Parsed ${deaths.length} deaths from server ${serverId}`);
     
-    // Check if HTML contains death table
-    const hasTable = initialHtml.includes('<table') && initialHtml.includes('</table>');
-    const hasDeaths = initialHtml.toLowerCase().includes('death') || initialHtml.toLowerCase().includes('died');
-    
-    console.log(`📊 Initial HTML: hasTable=${hasTable}, hasDeaths=${hasDeaths}`);
-    
-    if (!hasTable || !hasDeaths) {
-      console.log("⚠️ Table/deaths not in initial HTML - using Puppeteer for JavaScript rendering");
+    if (deaths.length === 0) {
+      throw new Error("No deaths found - page structure may have changed");
+    }
+
+    // Fetch character data for latest 5 deaths
+    const latestDeaths = deaths.slice(0, 5);
+    const deathsWithCharacterData = [];
+    let cacheHits = 0;
+    let cacheMisses = 0;
+
+    for (let i = 0; i < latestDeaths.length; i++) {
+      const death = latestDeaths[i];
+      const charCacheKey = `char_${death.player.toLowerCase()}`;
       
-      browser = await getBrowser();
-      page = await browser.newPage();
+      // Check character cache
+      const cachedChar = characterCache.get(charCacheKey);
+      if (cachedChar && Date.now() - cachedChar.timestamp < CHARACTER_CACHE_DURATION) {
+        console.log(`✓ ${death.player} (cached)`);
+        cacheHits++;
+        deathsWithCharacterData.push({ ...death, ...cachedChar.data });
+        continue;
+      }
       
-      // Set viewport to reduce memory
-      await page.setViewport({ width: 1024, height: 768 });
-      
-      // Navigate to the deaths page
-      console.log("🌐 Navigating with Puppeteer...");
-      await page.goto(url, { 
-        waitUntil: "networkidle2",
-        timeout: 25000 
-      });
-      
-      console.log("✅ Page loaded, waiting for table...");
-      
-      // Wait for the deaths table to appear
       try {
-        await page.waitForSelector("table tbody tr", { timeout: 10000 });
-      } catch (e) {
-        console.warn("⚠️ Table selector not found, extracting available content...");
-      }
-      
-      // Extract deaths from the page
-      const deaths = await extractDeathsFromPage(page);
-      console.log(`✅ Parsed ${deaths.length} deaths from server ${serverId}`);
-      
-      if (deaths.length === 0) {
-        throw new Error("No deaths found - page structure may have changed");
-      }
-
-      // Fetch character data for latest 5 deaths
-      const latestDeaths = deaths.slice(0, 5);
-      const deathsWithCharacterData = [];
-      let cacheHits = 0;
-      let cacheMisses = 0;
-
-      for (let i = 0; i < latestDeaths.length; i++) {
-        const death = latestDeaths[i];
-        const charCacheKey = `char_${death.player.toLowerCase()}`;
+        console.log(`✗ ${death.player} (fetching)`);
+        cacheMisses++;
         
-        // Check character cache
-        const cachedChar = characterCache.get(charCacheKey);
-        if (cachedChar && Date.now() - cachedChar.timestamp < CHARACTER_CACHE_DURATION) {
-          console.log(`✓ ${death.player} (cached)`);
-          cacheHits++;
-          deathsWithCharacterData.push({ ...death, ...cachedChar.data });
-          continue;
-        }
+        // Build character URL from player name
+        const charUrl = `https://rubinot.com.br/characters?name=${encodeURIComponent(death.player)}`;
         
+        await page.goto(charUrl, {
+          waitUntil: "networkidle2",
+          timeout: 15000
+        });
+        
+        // Wait for character info to load
         try {
-          console.log(`✗ ${death.player} (fetching)`);
-          cacheMisses++;
-          
-          // Build character URL from player name
-          const charUrl = `https://rubinot.com.br/characters?name=${encodeURIComponent(death.player)}`;
-          
-          await page.goto(charUrl, {
-            waitUntil: "networkidle2",
-            timeout: 15000
-          });
-          
-          // Wait for character info to load
-          try {
-            await page.waitForSelector("table", { timeout: 5000 });
-          } catch (e) {
-            console.warn(`⚠️ Character table not found for ${death.player}`);
-          }
-          
-          // Extract character data
-          const charData = await extractCharacterFromPage(page);
-          
-          // Cache the character data
-          characterCache.set(charCacheKey, {
-            data: charData,
-            timestamp: Date.now()
-          });
-          
-          deathsWithCharacterData.push({ ...death, ...charData });
-          
-          // Small delay between character fetches
-          if (i < latestDeaths.length - 1) {
-            await new Promise(resolve => setTimeout(resolve, 500));
-          }
-          
-        } catch (error) {
-          console.error(`❌ ${death.player}: ${error.message}`);
-          deathsWithCharacterData.push({
-            ...death,
-            vocation: "Unknown",
-            residence: "Unknown",
-            accountStatus: "Free Account",
-            guild: "No Guild"
-          });
-        }
-      }
-
-      console.log(`✅ Complete: ${deathsWithCharacterData.length} deaths (${cacheHits} cached, ${cacheMisses} fetched)`);
-
-      // Close page but keep browser alive
-      if (page) {
-        try {
-          await page.close();
+          await page.waitForSelector("table", { timeout: 5000 });
         } catch (e) {
-          // Ignore
+          console.warn(`⚠️ Character table not found for ${death.player}`);
         }
+        
+        // Extract character data
+        const charData = await extractCharacterFromPage(page);
+        
+        // Cache the character data
+        characterCache.set(charCacheKey, {
+          data: charData,
+          timestamp: Date.now()
+        });
+        
+        deathsWithCharacterData.push({ ...death, ...charData });
+        
+        // Small delay between character fetches
+        if (i < latestDeaths.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+        
+      } catch (error) {
+        console.error(`❌ ${death.player}: ${error.message}`);
+        deathsWithCharacterData.push({
+          ...death,
+          vocation: "Unknown",
+          residence: "Unknown",
+          accountStatus: "Free Account",
+          guild: "No Guild"
+        });
       }
-
-      // Cache results
-      cache.set(cacheKey, {
-        data: deathsWithCharacterData,
-        timestamp: Date.now()
-      });
-
-      return {
-        statusCode: 200,
-        headers: {
-          'Content-Type': 'application/json',
-          'Access-Control-Allow-Origin': '*'
-        },
-        body: JSON.stringify(deathsWithCharacterData)
-      };
-    } else {
-      // HTML already has content - try parsing directly
-      console.log("✅ Table found in initial HTML - parsing directly");
-      throw new Error("HTML parsing not yet implemented - please use Puppeteer version");
     }
+
+    console.log(`✅ Complete: ${deathsWithCharacterData.length} deaths (${cacheHits} cached, ${cacheMisses} fetched)`);
+
+    // Close page but keep browser alive
+    if (page) {
+      try {
+        await page.close();
+      } catch (e) {
+        // Ignore
+      }
+    }
+
+    // Cache results
+    cache.set(cacheKey, {
+      data: deathsWithCharacterData,
+      timestamp: Date.now()
+    });
+
+    return {
+      statusCode: 200,
+      headers: {
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*'
+      },
+      body: JSON.stringify(deathsWithCharacterData)
+    };
     
   } catch (err) {
     console.error("❌ Error:", err.message);
