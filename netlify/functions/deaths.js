@@ -1,20 +1,17 @@
-// Simplified version - Mock data (Puppeteer had too many environment issues on Netlify)
+// Real API version - Fetches deaths from rubinot.com.br
 const cache = new Map();
-const CACHE_DURATION = 3000;
+const CACHE_DURATION = 5000; // 5 second cache
 
-const mockDeathsByServer = {
-  "20": [
-    { player: "Torment Knight", level: 280, cause: "a dragon lord", time: "26.03.2026, 22:15:30", vocation: "Elite Knight", residence: "Thais", accountStatus: "VIP Account", guild: "Dragons of Power" },
-    { player: "Monster Hunter", level: 210, cause: "a demon", time: "26.03.2026, 21:45:12", vocation: "Royal Paladin", residence: "Carlin", accountStatus: "Free Account", guild: "No Guild" },
-    { player: "Shadow Master", level: 195, cause: "a lich", time: "26.03.2026, 20:30:45", vocation: "Master Sorcerer", residence: "Ankrahmun", accountStatus: "VIP Account", guild: "Shadow Guild" },
-  ],
-  "11": [
-    { player: "Golden Knight", level: 250, cause: "a tyrant", time: "26.03.2026, 22:00:00", vocation: "Elite Knight", residence: "Thais", accountStatus: "VIP Account", guild: "Golden Order" },
-  ],
-  "default": [
-    { player: "Test Player", level: 100, cause: "a rat", time: "26.03.2026, 12:00:00", vocation: "Sorcerer", residence: "Unknown", accountStatus: "Free Account", guild: "No Guild" }
-  ]
-};
+function formatTime(unixTimestamp) {
+  const date = new Date(parseInt(unixTimestamp) * 1000);
+  const day = String(date.getDate()).padStart(2, '0');
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const year = date.getFullYear();
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  const seconds = String(date.getSeconds()).padStart(2, '0');
+  return `${day}.${month}.${year}, ${hours}:${minutes}:${seconds}`;
+}
 
 export async function handler(event) {
   if (event.httpMethod === 'OPTIONS') {
@@ -30,14 +27,14 @@ export async function handler(event) {
   }
 
   try {
-    const serverId = event.queryStringParameters?.sever || "20";
+    const worldName = event.queryStringParameters?.sever || "Tormentum";
     const minLevel = parseInt(event.queryStringParameters?.minLevel || "0");
     const vipOnly = event.queryStringParameters?.vip === 'true';
 
-    const cacheKey = `deaths_${serverId}_${minLevel}_${vipOnly}`;
+    const cacheKey = `deaths_${worldName}_${minLevel}_${vipOnly}`;
     const cached = cache.get(cacheKey);
     if (cached && Date.now() - cached.timestamp < CACHE_DURATION) {
-      console.log(`✅ Cache hit for server ${serverId}`);
+      console.log(`✅ Cache hit for world ${worldName}`);
       return {
         statusCode: 200,
         headers: {
@@ -48,16 +45,46 @@ export async function handler(event) {
       };
     }
 
-    console.log(`📊 Mock deaths for server ${serverId}, minLevel=${minLevel}, vipOnly=${vipOnly}`);
+    console.log(`📊 Fetching deaths for world ${worldName}, minLevel=${minLevel}`);
 
-    let deaths = [...(mockDeathsByServer[serverId] || mockDeathsByServer["default"])];
-    
+    // Fetch from real Rubinot API
+    const response = await fetch('https://rubinot.com.br/deaths', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'text/plain;charset=UTF-8',
+      },
+      body: '{}'
+    });
+
+    if (!response.ok) {
+      throw new Error(`Rubinot API returned ${response.status}`);
+    }
+
+    const apiData = await response.json();
+
+    let deaths = (apiData.deaths || []).map(d => ({
+      player: d.victim,
+      level: d.level,
+      cause: d.killed_by,
+      time: formatTime(d.time),
+      worldName: d.worldName,
+      isPlayer: d.is_player === 1,
+      mostDamageBy: d.mostdamage_by,
+      mostDamageIsPlayer: d.mostdamage_is_player === 1
+    }));
+
+    // Filter by world
+    deaths = deaths.filter(d => d.worldName === worldName);
+
+    // Filter by level
     if (minLevel > 0) {
       deaths = deaths.filter(d => d.level >= minLevel);
     }
-    
+
+    // Note: vipOnly filter not applicable with current API data
+    // (no VIP status in the response)
     if (vipOnly) {
-      deaths = deaths.filter(d => d.accountStatus.toLowerCase().includes('vip'));
+      console.log('⚠️  vipOnly filter not supported by Rubinot API');
     }
 
     cache.set(cacheKey, {
