@@ -134,21 +134,39 @@ function App() {
 
       // Build the real Rubinot API URL
       const rubinotUrl = `https://rubinot.com.br/api/deaths?world=${currentWorld.current}&page=1&min_level=${currentMinLevel.current}`;
+      console.log(`🔗 Rubinot URL: ${rubinotUrl}`);
       
       // Use CORS proxy to fetch from browser
       const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(rubinotUrl)}`;
+      console.log(`🔌 Proxy URL: ${proxyUrl}`);
 
+      console.log(`⏳ Fetching...`);
       const res = await fetch(proxyUrl);
+      console.log(`📊 Response status: ${res.status}`);
         
       if (!res.ok) {
         throw new Error(`HTTP error! status: ${res.status}`);
       }
-        
-      const data = await res.json();
+
+      const textData = await res.text();
+      console.log(`📦 Raw response (first 200 chars): ${textData.substring(0, 200)}`);
+      
+      let data;
+      try {
+        data = JSON.parse(textData);
+      } catch (parseErr) {
+        console.error("Failed to parse JSON:", parseErr);
+        console.error("Raw response:", textData);
+        return;
+      }
+
+      console.log(`🔍 Parsed data type: ${typeof data}, Is array: ${Array.isArray(data)}`);
+      console.log(`📋 Data sample:`, data);
 
       // Handle response - should be a simple array of deaths
       if (!Array.isArray(data)) {
-        console.error("Invalid response format:", data);
+        console.error("❌ Invalid response format. Expected array, got:", typeof data);
+        console.error("Response keys:", Object.keys(data || {}));
         return;
       }
 
@@ -207,7 +225,8 @@ function App() {
       }
 
     } catch (err) {
-      console.error("Error fetching deaths:", err);
+      console.error("❌ Error fetching deaths:", err);
+      console.error("Stack:", err.stack);
       setIsLoadingServer(false);
     } finally {
       fetchingRef.current = false;
